@@ -109,7 +109,7 @@ class NRMP(torch.nn.Module):
             nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, point_list
         )
 
-        solutions = self.nrmp_layer(*parameter_values, solver_args={"solve_method": self.solver}) # see cvxpylayers and cvxpy for more details
+        solutions = self.nrmp_layer(*parameter_values, solver_args={"solve_method": self.solver})
         opt_solution_state = solutions[0]
         opt_solution_vel = solutions[1]
 
