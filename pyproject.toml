@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 irsim = ['ir-sim>=2.4.0']
 all = ['ir-sim>=2.4.0']
+ros2 = ['numpy<2.0']
 
 [tool.setuptools]
 py-modules = ['neupan']
