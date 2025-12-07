@@ -393,6 +393,9 @@ class InitialPath:
         elif self.robot.kinematics == "diff":
             next_state = self.diff_model(robot_state, vel, sample_time)
 
+        elif self.robot.kinematics == "omni":
+            next_state = self.omni_model(robot_state, vel, sample_time)
+
         return next_state
 
     def ackermann_model(self, car_state, vel, wheel_base, sample_time):
@@ -421,6 +424,29 @@ class InitialPath:
         w = vel[1, 0]
 
         ds = np.array([[v * cos(phi)], [v * sin(phi)], [w]])
+
+        next_state = robot_state + ds * sample_time
+
+        # next_state[2, 0] = wraptopi(next_state[2, 0])
+
+        return next_state
+
+    def omni_model(self, robot_state, vel, sample_time):
+
+        assert robot_state.shape == (3, 1) and vel.shape == (3, 1)
+
+        # Input vel is in robot frame: [vx_local, vy_local, omega]
+        # Need to convert to global frame
+        phi = robot_state[2, 0]
+        vx_local = vel[0, 0]
+        vy_local = vel[1, 0]
+        omega = vel[2, 0]
+
+        # Convert robot frame velocity to global frame
+        vx_global = vx_local * cos(phi) - vy_local * sin(phi)
+        vy_global = vx_local * sin(phi) + vy_local * cos(phi)
+
+        ds = np.array([[vx_global], [vy_global], [omega]])
 
         next_state = robot_state + ds * sample_time
 

@@ -70,8 +70,8 @@ class neupan(torch.nn.Module):
         self.collision_threshold = kwargs.get("collision_threshold", 0.1)
 
         # initialization
-        self.cur_vel_array = np.zeros((2, self.T))
         self.robot = robot(receding, step_time, **robot_kwargs)
+        self.cur_vel_array = np.zeros((self.robot.control_dim, self.T))
 
         self.ipath = InitialPath(
             receding, step_time, ref_speed, self.robot, **ipath_kwargs
@@ -113,7 +113,7 @@ class neupan(torch.nn.Module):
 
         if self.ipath.check_arrive(state):
             self.info["arrive"] = True
-            return np.zeros((2, 1)), self.info
+            return np.zeros((self.robot.control_dim, 1)), self.info
 
         nom_input_np = self.ipath.generate_nom_ref_state(
             state, self.cur_vel_array, self.ref_speed
@@ -149,7 +149,7 @@ class neupan(torch.nn.Module):
 
         if self.check_stop():
             self.info["stop"] = True
-            return np.zeros((2, 1)), self.info
+            return np.zeros((self.robot.control_dim, 1)), self.info
         else:
             self.info["stop"] = False
 

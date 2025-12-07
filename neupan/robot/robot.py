@@ -57,6 +57,13 @@ class robot:
         self.L = wheelbase
 
         self.kinematics = kinematics
+        
+        # Determine control dimension based on kinematics (default 2 for backward compatibility)
+        if kinematics == 'omni':
+            self.control_dim = 3
+        else:  # 'diff' or 'acker'
+            self.control_dim = 2
+        
         self.max_speed = np.c_[max_speed] if isinstance(max_speed, list) else max_speed
         self.max_acce = np.c_[max_acce] if isinstance(max_acce, list) else max_acce
 
@@ -78,7 +85,7 @@ class robot:
         """
 
         self.indep_s = cp.Variable((3, self.T + 1), name="state")  # t0 - T
-        self.indep_u = cp.Variable((2, self.T), name="vel")  # t1 - T
+        self.indep_u = cp.Variable((self.control_dim, self.T), name="vel")  # t1 - T
         
         indep_list = (
             [self.indep_s, self.indep_u]
@@ -103,7 +110,7 @@ class robot:
         self.para_gamma_b = cp.Parameter((self.T,), name='para_gamma_b')
 
         self.para_A_list = [ cp.Parameter((3, 3), name='para_A_'+str(t)) for t in range(self.T)]
-        self.para_B_list = [ cp.Parameter((3, 2), name='para_B_'+str(t)) for t in range(self.T)]
+        self.para_B_list = [ cp.Parameter((3, self.control_dim), name='para_B_'+str(t)) for t in range(self.T)]
         self.para_C_list = [ cp.Parameter((3, 1), name='para_C_'+str(t)) for t in range(self.T)]
 
         return [self.para_s, self.para_gamma_a, self.para_gamma_b] + self.para_A_list + self.para_B_list + self.para_C_list
@@ -239,8 +246,10 @@ class robot:
                 A, B, C = self.linear_ackermann_model(nom_st, nom_ut, self.dt, self.L)
             elif self.kinematics == 'diff':
                 A, B, C = self.linear_diff_model(nom_st, nom_ut, self.dt)
+            elif self.kinematics == 'omni':
+                A, B, C = self.linear_omni_model(nom_st, nom_ut, self.dt)
             else:
-                raise ValueError('kinematics currently only supports acker or diff')
+                raise ValueError('kinematics currently only supports acker, diff, or omni')
 
             tensor_A_list.append(A)
             tensor_B_list.append(B)
@@ -285,6 +294,37 @@ class robot:
                         [ 0 ]])
                 
         return to_device(A), to_device(B), to_device(C) 
+
+    def linear_omni_model(self, nom_st, nom_ut, dt):
+        
+        """
+        Linearized omni-directional model: 
+        Control input is in robot frame: [vx_local, vy_local, omega]
+        State is in global frame: [x, y, theta]
+        
+        A = I (no state coupling)
+        B = rotation matrix to convert robot frame to global frame
+        C = 0
+        """
+        
+        phi = nom_st[2, 0]
+        
+        # A matrix: no state coupling
+        A = torch.eye(3)
+        
+        # B matrix: convert robot frame [vx_local, vy_local, omega] to global frame [vx_global, vy_global, omega]
+        # Rotation matrix: [vx_global]   [cos(phi) -sin(phi)  0] [vx_local]
+        #                   [vy_global] = [sin(phi)  cos(phi)  0] [vy_local]
+        #                   [omega]      [0          0         1] [omega]
+        B = torch.Tensor([
+            [cos(phi)*dt, -sin(phi)*dt, 0],
+            [sin(phi)*dt, cos(phi)*dt, 0],
+            [0, 0, dt]
+        ])
+        
+        C = torch.zeros((3, 1))
+        
+        return to_device(A), to_device(B), to_device(C)
 
 
 

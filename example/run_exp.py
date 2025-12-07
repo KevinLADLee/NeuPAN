@@ -47,6 +47,22 @@ def main(
         env.draw_trajectory(neupan_planner.opt_trajectory, "r", refresh=True)
         env.draw_trajectory(neupan_planner.ref_trajectory, "b", refresh=True)
 
+        # Convert omni control from robot frame to global frame for ir-sim compatibility
+        # NeuPAN outputs [vx_local, vy_local, omega] in robot frame
+        # ir-sim expects [vx_global, vy_global] in global frame
+        if neupan_planner.robot.kinematics == 'omni' and action.shape[0] == 3:
+            # action is [vx_local, vy_local, omega] in robot frame
+            phi = robot_state[2, 0]
+            vx_local = action[0, 0]
+            vy_local = action[1, 0]
+            
+            # Convert to global frame [vx_global, vy_global]
+            vx_global = vx_local * np.cos(phi) - vy_local * np.sin(phi)
+            vy_global = vx_local * np.sin(phi) + vy_local * np.cos(phi)
+            
+            # ir-sim only accepts 2D control [vx, vy], ignore omega
+            action = np.array([[vx_global], [vy_global]])
+
         env.step(action)
         env.render()
 
@@ -74,7 +90,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--example", type=str, default="polygon_robot", help="pf, pf_obs, corridor, dyna_obs, dyna_non_obs, convex_obs, non_obs, polygon_robot, reverse")
-    parser.add_argument("-d", "--kinematics", type=str, default="diff", help="acker, diff")
+    parser.add_argument("-d", "--kinematics", type=str, default="diff", help="acker, diff, omni")
     parser.add_argument("-a", "--save_animation", action="store_true", help="save animation")
     parser.add_argument("-f", "--full", action="store_true", help="full screen")
     parser.add_argument("-n", "--no_display", action="store_false", help="no display")
