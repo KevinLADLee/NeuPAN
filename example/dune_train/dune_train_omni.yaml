@@ -1,7 +1,9 @@
 robot:
-  kinematics: 'diff'
+  kinematics: 'omni'
   length: 1.6
   width: 2.0
+  max_speed: [8.0, 8.0, 3.14]
+  max_acce:  [8.0, 8.0, 3.14]
 
 
 train:
@@ -20,7 +22,6 @@ train:
   dataloader_num_workers: 4  # Number of DataLoader workers (0 = single process, recommended: 2-4 for CPU)
   persistent_workers: true  # Keep workers alive between epochs (reduces overhead, requires num_workers > 0)
   prefetch_factor: 2  # Number of batches to prefetch per worker (default: 2)
-
 
 
 

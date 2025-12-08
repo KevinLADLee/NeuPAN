@@ -148,18 +148,31 @@ class robot:
 
 
     def C0_cost(self, para_p_u, para_q_s):
-        
+
         '''
         reference state cost and control vector cost
 
-        para_p_u: weight of speed cost
+        para_p_u: weight of speed cost (scalar)
         para_q_s: weight of state cost
         '''
 
-        diff_u = para_p_u * self.indep_u[0, :] - self.para_gamma_b
-        diff_s = para_q_s * self.indep_s - self.para_gamma_a
+        # For omni robots with multi-dimensional control,
+        # apply the same weight to all control dimensions
+        if self.control_dim > 1:
+            # Sum the squared error for all control dimensions
+            control_cost = 0
+            for i in range(self.control_dim):
+                diff_u_i = para_p_u * self.indep_u[i, :] - (self.para_gamma_b if i == 0 else 0)
+                control_cost += cp.sum_squares(diff_u_i)
+        else:
+            # Original behavior for single-dimensional control
+            diff_u = para_p_u * self.indep_u[0, :] - self.para_gamma_b
+            control_cost = cp.sum_squares(diff_u)
 
-        C0_cost = cp.sum_squares(diff_s) + cp.sum_squares(diff_u) 
+        diff_s = para_q_s * self.indep_s - self.para_gamma_a
+        state_cost = cp.sum_squares(diff_s)
+
+        C0_cost = state_cost + control_cost
 
         return C0_cost
 
@@ -296,22 +309,23 @@ class robot:
         return to_device(A), to_device(B), to_device(C) 
 
     def linear_omni_model(self, nom_st, nom_ut, dt):
-        
+
         """
-        Linearized omni-directional model: 
+        Linearized omni-directional model:
         Control input is in robot frame: [vx_local, vy_local, omega]
         State is in global frame: [x, y, theta]
-        
+
         A = I (no state coupling)
         B = rotation matrix to convert robot frame to global frame
         C = 0
         """
-        
-        phi = nom_st[2, 0]
-        
+
+        phi_tensor = nom_st[2, 0]
+        phi = phi_tensor.item()  # Extract as Python scalar
+
         # A matrix: no state coupling
         A = torch.eye(3)
-        
+
         # B matrix: convert robot frame [vx_local, vy_local, omega] to global frame [vx_global, vy_global, omega]
         # Rotation matrix: [vx_global]   [cos(phi) -sin(phi)  0] [vx_local]
         #                   [vy_global] = [sin(phi)  cos(phi)  0] [vy_local]
@@ -321,9 +335,9 @@ class robot:
             [sin(phi)*dt, cos(phi)*dt, 0],
             [0, 0, dt]
         ])
-        
+
         C = torch.zeros((3, 1))
-        
+
         return to_device(A), to_device(B), to_device(C)
 
 

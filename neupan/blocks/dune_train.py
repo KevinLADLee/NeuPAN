@@ -34,6 +34,9 @@ from neupan.configuration import np_to_tensor, value_to_tensor, to_device
 import pickle
 import time
 import os
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import cpu_count
+from contextlib import nullcontext
 
 
 class PointDataset(Dataset):
@@ -105,11 +108,37 @@ class DUNETrain:
             np_to_tensor(mu_value),
             value_to_tensor(distance_value),
         )
+    
+    @staticmethod
+    def _process_data_worker(args):
+        """Static method for parallel data processing"""
+        rand_p, G_np, h_np = args
+        
+        # Reconstruct the problem for this worker
+        mu = cp.Variable((G_np.shape[0], 1), nonneg=True)
+        p = cp.Parameter((2, 1))
+        cost = mu.T @ (G_np @ p - h_np)
+        constraints = [cp.norm(G_np.T @ mu) <= 1]
+        prob = cp.Problem(cp.Maximize(cost), constraints)
+        
+        # Solve
+        p.value = rand_p
+        try:
+            prob.solve(solver=cp.ECOS)
+        except Exception as exc:  # pragma: no cover - robustness
+            # Fallback on solver failure
+            return rand_p, np.zeros_like(h_np), 0.0
 
-    def generate_data_set(self, data_size=10000, data_range=[-50, -50, 50, 50]):
+        mu_value = mu.value if mu.value is not None else np.zeros_like(h_np)
+        distance_value = prob.value if prob.value is not None else 0.0
+
+        return (rand_p, mu_value, distance_value)
+
+    def generate_data_set(self, data_size=10000, data_range=[-50, -50, 50, 50], num_workers=0, log_benchmark=False):
         """
         generate dataset for training
         data_range: [low_x, low_y, high_x, high_y]
+        num_workers: number of parallel workers for data generation (0 = sequential, -1 = use all CPUs)
         """
 
         input_data = []
@@ -121,11 +150,49 @@ class DUNETrain:
         )
         rand_p_list = [rand_p[i].reshape(2, 1) for i in range(data_size)]
 
-        for p in rand_p_list:
-            results = self.process_data(p)
-            input_data.append(results[0])
-            label_data.append(results[1])
-            distance_data.append(results[2])
+        # Prepare data for parallel processing
+        G_np = self.G.cpu().numpy()
+        h_np = self.h.cpu().numpy()
+        
+        # Determine number of workers
+        if num_workers == -1:
+            num_workers = cpu_count()
+        elif num_workers == 0:
+            num_workers = 0
+        
+        if num_workers > 0:
+            # Parallel data generation
+            print(f"Generating data with {num_workers} parallel workers...")
+            start_time = time.time()
+            
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                args_list = [(p, G_np, h_np) for p in rand_p_list]
+                results = list(executor.map(DUNETrain._process_data_worker, args_list))
+            
+            elapsed_time = time.time() - start_time
+            print(f"Data generation completed in {elapsed_time:.2f} seconds")
+            if log_benchmark and elapsed_time > 0:
+                print(f"Throughput: {len(results)/elapsed_time:.1f} samples/sec")
+            
+            for rand_p_result, mu_value, distance_value in results:
+                input_data.append(np_to_tensor(rand_p_result))
+                label_data.append(np_to_tensor(mu_value))
+                distance_data.append(value_to_tensor(distance_value))
+        else:
+            # Sequential data generation (original method)
+            print("Generating data sequentially...")
+            start_time = time.time()
+            
+            for i, p in enumerate(rand_p_list):
+                if (i + 1) % 10000 == 0:
+                    print(f"Generated {i + 1}/{data_size} samples...")
+                results = self.process_data(p)
+                input_data.append(results[0])
+                label_data.append(results[1])
+                distance_data.append(results[2])
+            
+            elapsed_time = time.time() - start_time
+            print(f"Data generation completed in {elapsed_time:.2f} seconds")
 
         dataset = PointDataset(input_data, label_data, distance_data)
 
@@ -151,6 +218,13 @@ class DUNETrain:
         lr_decay: float = 0.5,
         decay_freq: int = 1500,
         save_loss: bool = False,
+        num_workers: int = 0,
+        data_gen_workers: int = 0,
+        dataloader_num_workers: int = 0,
+        persistent_workers: bool = False,
+        prefetch_factor: int = 2,
+        pin_memory: bool = False,
+        log_data_gen_benchmark: bool = False,
         **kwargs,
     ):
 
@@ -185,14 +259,40 @@ class DUNETrain:
         self.optimizer.param_groups[0]["lr"] = float(lr)
         ful_model_name = None
 
+        # Use data_gen_workers if provided, otherwise fall back to num_workers
+        data_gen_workers = data_gen_workers if data_gen_workers > 0 else num_workers
+
         print("dataset generating start ...")
-        dataset = self.generate_data_set(data_size, data_range)
-        train, valid, _ = random_split(
-            dataset, [int(data_size * 0.8), int(data_size * 0.2), 0]
+        dataset = self.generate_data_set(
+            data_size,
+            data_range,
+            num_workers=data_gen_workers,
+            log_benchmark=log_data_gen_benchmark,
         )
 
-        train_dataloader = DataLoader(train, batch_size=batch_size)
-        valid_dataloader = DataLoader(valid, batch_size=batch_size)
+        train_len = int(data_size * 0.8)
+        valid_len = data_size - train_len
+        train, valid = random_split(dataset, [train_len, valid_len])
+
+        # Optimize DataLoader for CPU training (best practices from PyTorch docs)
+        # - num_workers: parallel data loading (CPU can use multiprocessing)
+        # - persistent_workers: keep workers alive between epochs (reduces overhead)
+        # - prefetch_factor: number of batches to prefetch per worker
+        dataloader_kwargs = {
+            "batch_size": batch_size,
+            "num_workers": dataloader_num_workers,
+            "persistent_workers": persistent_workers and dataloader_num_workers > 0,
+            "prefetch_factor": prefetch_factor if dataloader_num_workers > 0 else None,
+            "pin_memory": pin_memory,
+        }
+        # Remove None values
+        dataloader_kwargs = {k: v for k, v in dataloader_kwargs.items() if v is not None}
+        
+        train_dataloader = DataLoader(train, shuffle=True, **dataloader_kwargs)
+        valid_dataloader = DataLoader(valid, **dataloader_kwargs)
+        
+        if dataloader_num_workers > 0:
+            print(f"DataLoader optimized: {dataloader_num_workers} workers, persistent={dataloader_kwargs.get('persistent_workers', False)}, prefetch={dataloader_kwargs.get('prefetch_factor', 2)}")
 
         print("dataset training start ...")
 
@@ -310,30 +410,34 @@ class DUNETrain:
 
         mu_loss, distance_loss, fa_loss, fb_loss = 0, 0, 0, 0
 
-        for input_point, label_mu, label_distance in train_dataloader:
+        ctx = torch.no_grad() if validate else nullcontext()
+        with ctx:
+            for input_point, label_mu, label_distance in train_dataloader:
 
-            self.optimizer.zero_grad()
+                if not validate:
+                    self.optimizer.zero_grad()
 
-            input_point = torch.squeeze(input_point)
-            output_mu = self.model(input_point)
-            output_mu = torch.unsqueeze(output_mu, 2)
+                input_point = torch.squeeze(input_point)
+                
+                output_mu = self.model(input_point)
+                output_mu = torch.unsqueeze(output_mu, 2)
 
-            distance = self.cal_distance(output_mu, input_point)
+                distance = self.cal_distance(output_mu, input_point)
 
-            mse_mu = self.loss_fn(output_mu, label_mu)
-            mse_distance = self.loss_fn(distance, label_distance)
-            mse_fa, mse_fb = self.cal_loss_fab(output_mu, label_mu, input_point)
+                mse_mu = self.loss_fn(output_mu, label_mu)
+                mse_distance = self.loss_fn(distance, label_distance)
+                mse_fa, mse_fb = self.cal_loss_fab(output_mu, label_mu, input_point)
 
-            loss = mse_mu + mse_distance + mse_fa + mse_fb
+                loss = mse_mu + mse_distance + mse_fa + mse_fb
 
-            if not validate:
-                loss.backward()
-                self.optimizer.step()
+                if not validate:
+                    loss.backward()
+                    self.optimizer.step()
 
-            mu_loss += mse_mu.item()
-            distance_loss += mse_distance.item()
-            fa_loss += mse_fa.item()
-            fb_loss += mse_fb.item()
+                mu_loss += mse_mu.item()
+                distance_loss += mse_distance.item()
+                fa_loss += mse_fa.item()
+                fb_loss += mse_fb.item()
 
         return (
             mu_loss / len(train_dataloader),

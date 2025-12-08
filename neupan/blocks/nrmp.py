@@ -120,11 +120,18 @@ class NRMP(torch.nn.Module):
     def generate_parameter_value(
         self, nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, point_list
     ):
-        
+
         adjust_value_list = self.generate_adjust_parameter_value()
 
+        # For multi-dimensional control with vector p_u, only use the first element for ref_us
+        # since ref_us only represents forward velocity reference
+        if self.robot.control_dim > 1 and self.p_u.dim() == 1 and self.p_u.shape[0] > 1:
+            p_u_for_ref = self.p_u[0]  # Use only the first element (vx weight)
+        else:
+            p_u_for_ref = self.p_u
+
         state_value_list = self.robot.generate_state_parameter_value(
-            nom_s, nom_u, self.q_s * ref_s, self.p_u * ref_us
+            nom_s, nom_u, self.q_s * ref_s, p_u_for_ref * ref_us
         )
 
         coefficient_value_list = self.generate_coefficient_parameter_value(

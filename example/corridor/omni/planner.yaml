@@ -1,7 +1,7 @@
 # mpc
-receding: 10
+receding: 20
 step_time: 0.1
-ref_speed: 4
+ref_speed: 2
 device: 'cpu'
 time_print: True
 collision_threshold: 0.1
@@ -9,15 +9,15 @@ collision_threshold: 0.1
 # robot
 robot:
   kinematics: 'omni'
-  max_speed: [4.0, 4.0, 3.14]  # [vx, vy, omega]
-  max_acce: [4.0, 4.0, 3.14]
+  max_speed: [2.0, 2.0, 3.14]  # [vx, vy, omega] robot frame
+  max_acce: [2.0, 2.0, 3.14]
   length: 1.6
   width: 2.0
 
 # initial path
 ipath:
   # interval: 0.4
-  waypoints: [[0, 20, 0], [60, 20, 0]]
+  waypoints: [[0, 20, 0], [30, 23, 0.785], [60, 20, 0]]
   curve_style: 'line'   # 'dubins' or reeds or line
   min_radius: 4.0
   loop: False
@@ -32,19 +32,14 @@ pan:
   dune_max_num: 100
   nrmp_max_num: 10
   iter_threshold: 0.1
-  dune_checkpoint: 'example/model/diff_robot_default/model_5000.pth'
+  dune_checkpoint: 'example/model/omni_robot_default/model_5000.pth'
 
 
 # adjust parameters
 adjust:
-  q_s: 1.0
-  p_u: 1.0
+  q_s: 0.1
+  p_u: 0.1  # Use scalar for now, weights all control dimensions equally
   eta: 15.0
   d_max: 1.0
-  d_min: 0.1
-
-  
-
-
-
+  d_min: 0.2
 
